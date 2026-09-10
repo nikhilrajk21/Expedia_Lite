@@ -1,0 +1,37 @@
+body {
+  margin: 0;
+  font-family: Arial, sans-serif;
+}
+
+main {
+  margin: 2rem;
+}
+
+form {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+input,
+button {
+  font: inherit;
+  padding: 0.4rem;
+}
+
+table {
+  border-collapse: collapse;
+  margin-top: 1rem;
+}
+
+th,
+td {
+  border: 1px solid #999;
+  padding: 0.5rem;
+  text-align: left;
+}
+
+caption {
+  margin-bottom: 0.5rem;
+  font-weight: bold;
+}
