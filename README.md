@@ -1,17 +1,29 @@
 # Expedia Lite
 
-Assignment 1 project using a Vue (JavaScript) frontend and FastAPI (Python) backend.
+Assignment 1 uses a Vue frontend, FastAPI backend, and persistent SQLite database.
 
-## Status
+## SQLite setup and run commands
 
-Project documentation and folder structure are in place. Application scaffolding, dependencies, and CSV data have not yet been added.
+The database is `data/expedia_lite.sqlite3`. FastAPI creates its schema and seeds the supplied CSV records only once; later starts do not reload or duplicate them.
 
-## Planned setup
+```powershell
+Set-Location backend
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload
+```
 
-1. Install a supported Python runtime and create `backend/.venv`.
-2. Install backend requirements into that project-local environment.
-3. Scaffold the Vue frontend in `frontend/` with npm.
-4. Place the supplied CSV files in `data/`.
-5. Implement and verify Part 1 CSV hotel/stay search before beginning Part 2.
+The default API/docs URLs are `http://127.0.0.1:8000` and `http://127.0.0.1:8000/docs`.
 
-Detailed architecture is in [docs/design.md](docs/design.md).
+```powershell
+Set-Location frontend
+npm run dev
+```
+
+Vite proxies `/api` to port 8000 by default. To use another local backend port for verification, set `VITE_API_TARGET` before starting Vite.
+
+## Part 2 actions
+
+- SQLite hotel and stay search.
+- Booking creation with backend-generated IDs.
+- Booking history, including cancelled records.
+- Cancellation without deletion.
+- Deletion only for an explicitly created test booking.

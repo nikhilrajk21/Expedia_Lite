@@ -2,20 +2,14 @@
 
 ## Frontend responsibilities
 
-The Vue application will provide the hotel-name search field, Search button, readable result table, and a clear no-results state. It will send JSON requests to FastAPI and render JSON responses.
+Vue performs hotel/stay search, booking creation, history display, cancellation, and test-booking deletion through the FastAPI JSON API. It displays success and error status messages.
 
-## FastAPI responsibilities
+## FastAPI and SQLite responsibilities
 
-The FastAPI application will define the HTTP API, validate request inputs, coordinate search and later booking operations, and return JSON responses. It will not contain Vue UI code.
+FastAPI validates requests and serves `GET /api/hotels/search`, `GET /api/bookings`, `POST /api/bookings`, `PATCH /api/bookings/{booking_id}`, and `DELETE /api/bookings/{booking_id}`. Runtime reads and writes use SQLite at `data/expedia_lite.sqlite3`; supplied CSV files are used only for one-time seeding.
 
-## Backend responsibilities
-
-For Part 1, Python backend logic will read the supplied `hotels.csv` and `trips.csv`, connect records using `hotel_id`, and return matching hotels with available stays.
-
-For Part 2, after the supplied data is seeded, Python backend logic will use SQLite exclusively for all reads and writes. It will preserve supplied IDs, allocate unique IDs for new records, retain cancelled bookings in history, and permit deletion only for test bookings.
+SQLite preserves supplied IDs and enforces `trips.hotel_id → hotels.hotel_id`, `bookings.user_id → users.user_id`, and `bookings.trip_id → trips.trip_id` with foreign keys enabled on each connection.
 
 ## Data flow
 
-`Vue → JSON request → FastAPI → Python data layer → JSON response → Vue`
-
-Part 1 uses supplied CSV files. Part 2 replaces runtime CSV access with SQLite after seeding.
+`Vue → JSON request → FastAPI → Python/SQLite → JSON response → Vue`
