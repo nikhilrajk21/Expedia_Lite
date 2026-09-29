@@ -1,30 +1,27 @@
-# Expedia Lite — Part 1
+# Expedia Lite — Part 2
 
 ## Repository and commit
 
-GitHub repository: [https://github.com/nikhilrajk21/Expedia_Lite.git](https://github.com/nikhilrajk21/Expedia_Lite.git)
-
-Submitted commit: `cb7363dec9a800c740bb22db83c18beb2bff2116` (`Initialize Expedia Lite Part 1`) on branch `master`. The working tree was clean when this report was prepared.
+The active branch is `assignment-1-part2-sqlite-crud`, created from Part 1 commit `f42f1548715981a1b06a6ac2e4cab3a90f882842` (`Document Expedia Lite Part 1`). No Part 2 commit has been made.
 
 ## Implementation
 
-The Vue JavaScript frontend provides one labeled hotel-name input and Search button. It requests `/api/hotels/search?name=...`, renders matching hotels and their stays in a semantic HTML table, and shows distinct no-results and request-error messages. Vite forwards `/api` requests to the local FastAPI server during development.
-
-The FastAPI/Python backend defines `GET /api/hotels/search`. It reads the supplied `data/hotels.csv` and `data/trips.csv` using project-relative paths, performs a case-insensitive hotel-name search, and returns JSON with a `results` collection. Each result preserves the hotel CSV fields and includes `available_stays`. Trips are connected to hotels through the supplied `hotel_id` field. The CSV reader uses `utf-8-sig` so the supplied UTF-8 BOM does not alter the first header name.
+The backend initializes `data/expedia_lite.sqlite3`, seeds the supplied CSV rows once, and uses SQLite for hotel/stay search and booking CRUD. The Vue app provides hotel search, booking creation/history, cancellation, and test-booking deletion. Vite defaults to port-8000 API proxying and accepts `VITE_API_TARGET` for a local alternate backend port.
 
 ## Verification
 
-- Backend compilation: `python -m compileall app` completed successfully.
-- Backend dependency checks: FastAPI imported successfully as `0.141.1`; Uvicorn `0.52.4` was available; `python -m pip check` reported no broken requirements.
-- Successful hotel search: FastAPI's in-process test client verified `/api/hotels/search?name=harbor` returns `H001` (`Harbor Lantern Hotel`) with the connected stays `T001` and `T009`. A live HTTP request to the same endpoint returned HTTP 200 with that result.
-- No-results search: the in-process test verified both `name=not a hotel` and a blank query return `{"results": []}`.
-- Frontend checks: `npm run lint` completed successfully with no warnings or errors after ESLint formatting. `npm run build` completed successfully with Vite after transforming 11 modules.
-- Frontend availability check: the local frontend server returned HTTP 200 and served the Vue application root.
-- Manual browser review: Not verified. No manually captured visual walkthrough was recorded.
-- Screenshots: Not verified. No project screenshots were found; therefore, no screenshot links are included.
+- Hotel search — expected Harbor result with connected stays; observed HTTP 200 with `H001`, `T001`, and `T009` from the live SQLite backend. Browser search also displayed the two stays.
+- Booking creation — expected unique new ID; observed `POST /api/bookings` created `B007` for supplied `U006`/`T012`.
+- Booking history — expected the new record; observed `B007` in history with traveler, trip, hotel, and confirmed status.
+- Cancellation while retaining the record — expected status change without deletion; observed `PATCH` changed `B007` to `cancelled` and history retained it.
+- Deletion of a test booking — expected only test deletion; observed test `B008` deleted and absent from history; seeded `B001` deletion returned 409 in prior direct API verification.
+- Browser refresh persistence — Not verified for booking CRUD because the automation browser could not reach the newly spawned Vite ports.
+- Backend/frontend restart persistence — backend restart verified `B007` remains cancelled and `B008` remains absent; frontend-service/browser restart persistence Not verified.
+- No duplicate seed records — expected 8/12/6/6 starter rows; observed unchanged counts across repeated initialization.
+- Backend pytest — pytest import passed; test run collected 0 tests and exited 5.
+- Frontend lint — `npm run lint` passed after the Vue change.
+- Frontend production build — `npm run build` passed after the Vue change.
 
 ## Project context and next steps
 
-Project context is documented in [README.md](README.md), [AGENTS.md](AGENTS.md), [docs/design.md](docs/design.md), [prompts/assignment-1-part1.md](prompts/assignment-1-part1.md), and [handoffs/current.md](handoffs/current.md). The referenced `prompts/assignment-1-part1.md` file is not present, so its content is Not verified.
-
-SQLite and booking CRUD are deferred to Part 2.
+Port 8000 is occupied by an unrelated stale service, so live Part 2 verification used port 8001 and `VITE_API_TARGET`. Review the uncommitted Part 2 changes, then approve the exact commit scope before any commit or push.
