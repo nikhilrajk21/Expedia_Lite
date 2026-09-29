@@ -1,5 +1,7 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import L from 'leaflet'
+import 'leaflet/dist/leaflet.css'
 
 const hotelName = ref('')
 const results = ref([])
@@ -14,6 +16,18 @@ const bookingForm = ref({ userId: 'U001', tripId: 'T001', bookedOn: '2026-09-10'
 const bookingLoading = ref(false)
 const bookingMessage = ref('')
 const bookingError = ref('')
+const zipCode = ref('')
+const zipLocation = ref(null)
+const zipLoading = ref(false)
+const zipValidationMessage = ref('')
+const zipError = ref('')
+const nearbyState = ref('initial')
+const nearbyHotels = ref([])
+const nearbyMapElement = ref(null)
+const nearbyMap = ref(null)
+const nearbyMarkerLayer = ref(null)
+const selectedNearbyPlaceId = ref('')
+const nearbyMarkersByPlaceId = new Map()
 
 const allStays = computed(() => results.value.flatMap((hotel) => hotel.available_stays.map((stay) => ({
   ...stay,
@@ -54,7 +68,11 @@ const chartMaxRate = computed(() => Math.max(...allStays.value.map((stay) => sta
 async function requestJson(url, options) {
   const response = await fetch(url, options)
   const data = await response.json()
-  if (!response.ok) throw new Error(data.detail ?? 'Request failed with status ' + response.status)
+  if (!response.ok) {
+    const error = new Error(data.detail ?? 'Request failed with status ' + response.status)
+    error.status = response.status
+    throw error
+  }
   return data
 }
 
@@ -71,6 +89,213 @@ async function searchHotels() {
     errorMessage.value = error.message ?? 'Unable to reach the hotel search service.'
   } finally {
     isLoading.value = false
+  }
+}
+
+function validateZipCode(value) {
+  if (!value) return 'Enter a five-digit U.S. ZIP code.'
+  if (value.length < 5) return 'ZIP codes must contain five digits.'
+  if (value.length > 5) return 'ZIP codes must contain exactly five digits.'
+  if (!/^\d{5}$/.test(value)) return 'Use five digits only; do not include letters or spaces.'
+  return ''
+}
+
+function isValidCoordinate(value, minimum, maximum) {
+  return typeof value === 'number' && Number.isFinite(value) && value >= minimum && value <= maximum
+}
+
+function validateNearbyHotels(hotels) {
+  if (!Array.isArray(hotels)) return { valid: false, hotels: [] }
+  const seenPlaceIds = new Set()
+  const validHotels = []
+  for (const hotel of hotels) {
+    const hasRequiredFields = hotel
+      && typeof hotel.place_id === 'string'
+      && hotel.place_id.trim()
+      && typeof hotel.name === 'string'
+      && hotel.name.trim()
+      && isValidCoordinate(hotel.latitude, -90, 90)
+      && isValidCoordinate(hotel.longitude, -180, 180)
+    if (!hasRequiredFields) return { valid: false, hotels: [] }
+    if (seenPlaceIds.has(hotel.place_id)) continue
+    seenPlaceIds.add(hotel.place_id)
+    validHotels.push(hotel)
+  }
+  return { valid: true, hotels: validHotels }
+}
+
+function destroyNearbyMap() {
+  if (nearbyMap.value) {
+    nearbyMap.value.stop()
+    nearbyMap.value.remove()
+  }
+  nearbyMap.value = null
+  nearbyMarkerLayer.value = null
+  nearbyMarkersByPlaceId.clear()
+  selectedNearbyPlaceId.value = ''
+}
+
+function popupContent(hotel) {
+  const content = document.createElement('div')
+  const name = document.createElement('strong')
+  name.textContent = hotel.name
+  content.append(name)
+  const address = hotel.address || hotel.locality
+  if (address) {
+    const detail = document.createElement('div')
+    detail.textContent = address
+    content.append(detail)
+  }
+  return content
+}
+
+function hotelMarkerIcon(selected) {
+  return L.divIcon({
+    className: 'nearby-marker-icon',
+    html: '<span class="nearby-marker-dot' + (selected ? ' selected' : '') + '" aria-hidden="true"></span>',
+    iconSize: [24, 24],
+    iconAnchor: [12, 12],
+    popupAnchor: [0, -12],
+  })
+}
+
+function updateNearbyMarkerStyles() {
+  nearbyMarkersByPlaceId.forEach((marker, placeId) => {
+    const selected = placeId === selectedNearbyPlaceId.value
+    marker.setIcon(hotelMarkerIcon(selected))
+    marker.setZIndexOffset(selected ? 1000 : 0)
+  })
+}
+
+function highlightNearbyHotel(placeId) {
+  selectedNearbyPlaceId.value = placeId
+  updateNearbyMarkerStyles()
+}
+
+function selectNearbyHotel(placeId) {
+  highlightNearbyHotel(placeId)
+  const marker = nearbyMarkersByPlaceId.get(placeId)
+  if (!marker || !nearbyMap.value) return
+  marker.openPopup()
+  nearbyMap.value.panTo(marker.getLatLng())
+}
+
+function renderNearbyMap() {
+  const location = zipLocation.value
+  if (!nearbyMapElement.value || !location) return
+  if (!isValidCoordinate(location.latitude, -90, 90) || !isValidCoordinate(location.longitude, -180, 180)) return
+
+  const center = [location.latitude, location.longitude]
+  if (!nearbyMap.value) {
+    nearbyMap.value = L.map(nearbyMapElement.value, { scrollWheelZoom: false })
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; OpenStreetMap contributors',
+    }).addTo(nearbyMap.value)
+    nearbyMarkerLayer.value = L.layerGroup().addTo(nearbyMap.value)
+  }
+
+  nearbyMap.value.setView(center, 13)
+  nearbyMarkerLayer.value.clearLayers()
+  nearbyMarkersByPlaceId.clear()
+  const bounds = L.latLngBounds([center])
+  L.circleMarker(center, {
+    color: '#1769e8',
+    fillColor: '#1769e8',
+    fillOpacity: 0.2,
+    radius: 10,
+  }).bindPopup('ZIP ' + location.postcode).addTo(nearbyMarkerLayer.value)
+
+  let hotelMarkerCount = 0
+  nearbyHotels.value.forEach((hotel) => {
+    if (!isValidCoordinate(hotel.latitude, -90, 90) || !isValidCoordinate(hotel.longitude, -180, 180)) return
+    const coordinates = [hotel.latitude, hotel.longitude]
+    const marker = L.marker(coordinates, {
+      icon: hotelMarkerIcon(false),
+      title: hotel.name,
+    })
+      .bindPopup(popupContent(hotel))
+      .on('click', () => selectNearbyHotel(hotel.place_id))
+      .on('popupopen', () => highlightNearbyHotel(hotel.place_id))
+      .addTo(nearbyMarkerLayer.value)
+    nearbyMarkersByPlaceId.set(hotel.place_id, marker)
+    bounds.extend(coordinates)
+    hotelMarkerCount += 1
+  })
+
+  if (hotelMarkerCount > 0) nearbyMap.value.fitBounds(bounds, { padding: [24, 24], maxZoom: 14 })
+  nearbyMap.value.invalidateSize()
+}
+
+async function lookupZip() {
+  nearbyState.value = 'loading'
+  zipLocation.value = null
+  nearbyHotels.value = []
+  destroyNearbyMap()
+  zipValidationMessage.value = ''
+  zipError.value = ''
+
+  const validatedZip = zipCode.value.trim()
+  zipCode.value = validatedZip
+  const validationMessage = validateZipCode(validatedZip)
+  if (validationMessage) {
+    nearbyState.value = 'invalid'
+    zipValidationMessage.value = validationMessage
+    return
+  }
+
+  zipLoading.value = true
+  try {
+    const data = await requestJson('/api/hotels/nearby?zip_code=' + encodeURIComponent(validatedZip))
+    if (!data || typeof data.zip_code !== 'string' || !data.center
+      || !isValidCoordinate(data.center.latitude, -90, 90)
+      || !isValidCoordinate(data.center.longitude, -180, 180)) {
+      nearbyState.value = 'invalid-provider-data'
+      zipError.value = 'The provider returned incomplete location data, so no results were shown.'
+      return
+    }
+    const normalizedResults = validateNearbyHotels(data.results)
+    if (!normalizedResults.valid) {
+      nearbyState.value = 'invalid-provider-data'
+      zipError.value = 'The provider returned incomplete hotel data, so no results were shown.'
+      return
+    }
+    if (normalizedResults.hotels.length === 0) {
+      nearbyState.value = 'no-results'
+      zipError.value = 'No nearby hotels were found for that ZIP code.'
+      return
+    }
+    zipLocation.value = {
+      postcode: data.zip_code,
+      latitude: data.center.latitude,
+      longitude: data.center.longitude,
+    }
+    nearbyHotels.value = normalizedResults.hotels
+    nearbyState.value = 'success'
+    await nextTick()
+    renderNearbyMap()
+  } catch (error) {
+    if (error.status === 400) {
+      nearbyState.value = 'invalid'
+      zipError.value = 'Use exactly five ASCII digits for the ZIP code.'
+    } else if (error.status === 404) {
+      nearbyState.value = error.message.includes('No hotels') ? 'no-results' : 'unresolved'
+      zipError.value = error.message.includes('No hotels')
+        ? 'No nearby hotels were found for that ZIP code.'
+        : 'That ZIP code could not be resolved.'
+    } else if (error.status === 502) {
+      nearbyState.value = error.message.includes('incomplete') ? 'invalid-provider-data' : 'provider-error'
+      zipError.value = error.message.includes('incomplete')
+        ? 'The provider returned incomplete hotel data, so no results were shown.'
+        : 'The nearby hotel provider is temporarily unavailable.'
+    } else if (error.status === 503) {
+      nearbyState.value = 'provider-error'
+      zipError.value = 'The nearby hotel service is not configured.'
+    } else {
+      nearbyState.value = 'network-error'
+      zipError.value = 'The nearby hotel service could not be reached. Please try again.'
+    }
+  } finally {
+    zipLoading.value = false
   }
 }
 
@@ -147,6 +372,7 @@ async function deleteBooking(bookingId) {
 }
 
 onMounted(loadBookings)
+onBeforeUnmount(destroyNearbyMap)
 </script>
 
 <template>
@@ -255,6 +481,157 @@ onMounted(loadBookings)
             {{ isLoading ? 'Searching…' : 'Search' }}
           </button>
         </form>
+        <section
+          class="zip-lookup-panel"
+          :data-nearby-state="nearbyState"
+          aria-labelledby="zip-lookup-title"
+        >
+          <div class="zip-lookup-copy">
+            <p class="eyebrow">
+              LOCATION LOOKUP
+            </p>
+            <h2 id="zip-lookup-title">
+              Find a place by ZIP code
+            </h2>
+            <p>Check a U.S. ZIP code before planning your stay.</p>
+          </div>
+          <form
+            class="zip-form"
+            @submit.prevent="lookupZip"
+          >
+            <label for="zip-code">U.S. ZIP code<input
+              id="zip-code"
+              v-model="zipCode"
+              type="text"
+              inputmode="numeric"
+              autocomplete="postal-code"
+              aria-describedby="zip-help"
+              placeholder="e.g. 16802"
+            ></label>
+            <button
+              class="search-button"
+              type="submit"
+              :disabled="zipLoading"
+            >
+              {{ zipLoading ? 'Looking up…' : 'Look up ZIP' }}
+            </button>
+          </form>
+          <p
+            id="zip-help"
+            class="zip-help"
+          >
+            Enter five digits. Leading zeros are preserved.
+          </p>
+          <p
+            v-if="nearbyState === 'initial'"
+            class="notice"
+            role="status"
+          >
+            Enter a five-digit ZIP code to find nearby hotels.
+          </p>
+          <p
+            v-else-if="zipLoading"
+            class="notice"
+            role="status"
+            aria-live="polite"
+          >
+            Looking up ZIP…
+          </p>
+          <p
+            v-else-if="zipValidationMessage"
+            class="notice error"
+            role="alert"
+          >
+            {{ zipValidationMessage }}
+          </p>
+          <p
+            v-else-if="zipError"
+            class="notice error"
+            role="alert"
+          >
+            {{ zipError }}
+          </p>
+          <dl
+            v-if="zipLocation"
+            class="zip-location-result"
+            aria-label="ZIP location result"
+          >
+            <div>
+              <dt>Postcode</dt><dd>{{ zipLocation.postcode }}</dd>
+            </div>
+            <div v-if="zipLocation.locality">
+              <dt>Locality</dt><dd>{{ zipLocation.locality }}</dd>
+            </div>
+            <div v-if="zipLocation.country_code">
+              <dt>Country code</dt><dd>{{ zipLocation.country_code }}</dd>
+            </div>
+            <div>
+              <dt>Latitude</dt><dd>{{ zipLocation.latitude }}</dd>
+            </div>
+            <div>
+              <dt>Longitude</dt><dd>{{ zipLocation.longitude }}</dd>
+            </div>
+          </dl>
+          <section
+            v-if="zipLocation"
+            class="nearby-results"
+            aria-labelledby="nearby-results-title"
+          >
+            <div class="nearby-results-heading">
+              <div>
+                <p class="eyebrow">
+                  NEARBY HOTELS
+                </p>
+                <h2 id="nearby-results-title">
+                  Hotels near {{ zipLocation.postcode }}
+                </h2>
+              </div>
+              <span>{{ nearbyHotels.length }} provider result{{ nearbyHotels.length === 1 ? '' : 's' }}</span>
+            </div>
+            <div class="nearby-results-layout">
+              <div
+                ref="nearbyMapElement"
+                class="nearby-map"
+                role="region"
+                aria-label="Map of hotels near the ZIP code"
+                tabindex="0"
+              />
+              <div class="nearby-hotel-list">
+                <article
+                  v-for="hotel in nearbyHotels"
+                  :key="hotel.place_id"
+                  class="nearby-hotel"
+                  :class="{ selected: selectedNearbyPlaceId === hotel.place_id }"
+                  role="button"
+                  tabindex="0"
+                  :aria-pressed="selectedNearbyPlaceId === hotel.place_id"
+                  @click="selectNearbyHotel(hotel.place_id)"
+                  @keydown.enter.prevent="selectNearbyHotel(hotel.place_id)"
+                  @keydown.space.prevent="selectNearbyHotel(hotel.place_id)"
+                >
+                  <h3>{{ hotel.name }}</h3>
+                  <p v-if="hotel.address">
+                    {{ hotel.address }}
+                  </p>
+                  <p v-else-if="hotel.locality">
+                    {{ hotel.locality }}
+                  </p>
+                  <dl class="nearby-hotel-fields">
+                    <div v-if="hotel.locality && hotel.address">
+                      <dt>Locality</dt><dd>{{ hotel.locality }}</dd>
+                    </div>
+                    <div>
+                      <dt>Place ID</dt><dd>{{ hotel.place_id }}</dd>
+                    </div>
+                    <div>
+                      <dt>Coordinates</dt><dd>{{ hotel.latitude }}, {{ hotel.longitude }}</dd>
+                    </div>
+                  </dl>
+                </article>
+              </div>
+            </div>
+          </section>
+        </section>
         <p
           v-if="errorMessage"
           class="notice error"

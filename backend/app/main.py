@@ -7,14 +7,25 @@ from typing import Literal
 from fastapi import FastAPI, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field
 
+from .config import is_geoapify_api_key_configured
+
 try:  # Supports backend-directory Uvicorn and project-root test imports.
     from controllers import (
         BookingController,
         CreateBookingCommand,
         DatabaseController,
         HotelController,
+        InvalidZipCodeError,
+        LocationController,
+        NearbyHotelController,
+        NearbyHotelInvalidDataError,
+        NearbyHotelNoResultsError,
+        NearbyHotelProviderError,
         ReferenceNotFoundError,
         TestBookingDeletionError,
+        ZipLookupConfigurationError,
+        ZipLookupProviderError,
+        ZipLookupUnresolvedError,
     )
 except ModuleNotFoundError:  # pragma: no cover - depends on launch directory
     from backend.controllers import (
@@ -22,13 +33,24 @@ except ModuleNotFoundError:  # pragma: no cover - depends on launch directory
         CreateBookingCommand,
         DatabaseController,
         HotelController,
+        InvalidZipCodeError,
+        LocationController,
+        NearbyHotelController,
+        NearbyHotelInvalidDataError,
+        NearbyHotelNoResultsError,
+        NearbyHotelProviderError,
         ReferenceNotFoundError,
         TestBookingDeletionError,
+        ZipLookupConfigurationError,
+        ZipLookupProviderError,
+        ZipLookupUnresolvedError,
     )
 
 database_controller = DatabaseController()
 hotel_controller = HotelController(database_controller)
 booking_controller = BookingController(database_controller)
+location_controller = LocationController()
+nearby_hotel_controller = NearbyHotelController(location_controller.lookup_demo_postcode)
 
 class BookingCreateRequest(BaseModel):
     """Frontend request for a booking; the server owns booking ID and status."""
@@ -56,6 +78,133 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="Expedia Lite API", lifespan=lifespan)
+
+
+@app.get("/api/health")
+def get_health() -> dict:
+    """Return backend health and whether the Geoapify key is usable."""
+    key_status = (
+        "key is configured"
+        if is_geoapify_api_key_configured()
+        else "key is not configured"
+    )
+    return {"status": "ok", "geoapify_api_key": key_status}
+
+
+@app.get("/api/demo/zip-location")
+def get_demo_zip_location(
+    zip_code: str = Query(..., description="Five-digit U.S. ZIP code")
+) -> dict[str, object]:
+    """Return the controller's validated location for a requested ZIP code."""
+    try:
+        return location_controller.lookup_demo_postcode(zip_code)
+    except InvalidZipCodeError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="ZIP code must be exactly five ASCII digits.",
+        ) from None
+    except ZipLookupConfigurationError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="ZIP lookup is not configured.",
+        ) from None
+    except ZipLookupUnresolvedError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Requested ZIP code could not be resolved.",
+        ) from None
+    except ZipLookupProviderError:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="ZIP lookup provider is unavailable.",
+        ) from None
+
+
+@app.get("/api/demo/nearby-hotels")
+def get_nearby_hotels(
+    zip_code: str = Query(..., description="Five-digit U.S. ZIP code")
+) -> dict[str, list[dict[str, object]]]:
+    """Return sanitized Geoapify hotel fields near a requested ZIP."""
+    try:
+        return {"results": nearby_hotel_controller.find_nearby_hotels(zip_code)}
+    except InvalidZipCodeError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="ZIP code must be exactly five ASCII digits.",
+        ) from None
+    except ZipLookupConfigurationError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="ZIP lookup is not configured.",
+        ) from None
+    except ZipLookupUnresolvedError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Requested ZIP code could not be resolved.",
+        ) from None
+    except NearbyHotelNoResultsError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No hotels were found near the requested ZIP.",
+        ) from None
+    except (ZipLookupProviderError, NearbyHotelProviderError):
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Nearby hotel provider is unavailable.",
+        ) from None
+
+
+@app.get("/api/hotels/nearby")
+def get_hotels_nearby(
+    zip_code: str = Query(..., description="Five-digit U.S. ZIP code")
+) -> dict[str, object]:
+    """Resolve a ZIP and return sanitized hotels within 5 km of its center."""
+    try:
+        location = location_controller.lookup_demo_postcode(zip_code)
+        results = nearby_hotel_controller.find_nearby_hotels_at_location(location)
+        return {
+            "zip_code": location["postcode"],
+            "center": {
+                "latitude": location["latitude"],
+                "longitude": location["longitude"],
+            },
+            "results": results,
+        }
+    except InvalidZipCodeError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="ZIP code must be exactly five ASCII digits.",
+        ) from None
+    except ZipLookupConfigurationError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="ZIP lookup is not configured.",
+        ) from None
+    except ZipLookupUnresolvedError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Requested ZIP code could not be resolved.",
+        ) from None
+    except NearbyHotelNoResultsError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No hotels were found near the requested ZIP.",
+        ) from None
+    except ZipLookupProviderError:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="ZIP lookup provider is unavailable.",
+        ) from None
+    except NearbyHotelInvalidDataError:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Nearby hotel provider returned incomplete hotel data.",
+        ) from None
+    except NearbyHotelProviderError:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Nearby hotel provider is unavailable.",
+        ) from None
 
 
 @app.get("/api/hotels/search")

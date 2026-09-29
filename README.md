@@ -13,6 +13,10 @@ Set-Location backend
 
 The default API/docs URLs are `http://127.0.0.1:8000` and `http://127.0.0.1:8000/docs`.
 
+## Local environment configuration
+
+Store local configuration in the project-root `.env` file, alongside `README.md`. The backend reads this file when it starts, so restart the backend after editing `.env`.
+
 ```powershell
 Set-Location frontend
 npm run dev

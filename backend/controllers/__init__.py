@@ -9,6 +9,19 @@ from .database_controller import (
     TestBookingDeletionError,
 )
 from .hotel_controller import HotelController
+from .location_controller import (
+    InvalidZipCodeError,
+    LocationController,
+    ZipLookupConfigurationError,
+    ZipLookupProviderError,
+    ZipLookupUnresolvedError,
+)
+from .nearby_hotel_controller import (
+    NearbyHotelController,
+    NearbyHotelInvalidDataError,
+    NearbyHotelNoResultsError,
+    NearbyHotelProviderError,
+)
 
 __all__ = [
     "DATABASE_PATH",
@@ -16,6 +29,15 @@ __all__ = [
     "CreateBookingCommand",
     "DatabaseController",
     "HotelController",
+    "InvalidZipCodeError",
+    "LocationController",
+    "NearbyHotelController",
+    "NearbyHotelInvalidDataError",
+    "NearbyHotelNoResultsError",
+    "NearbyHotelProviderError",
     "ReferenceNotFoundError",
     "TestBookingDeletionError",
+    "ZipLookupConfigurationError",
+    "ZipLookupProviderError",
+    "ZipLookupUnresolvedError",
 ]
