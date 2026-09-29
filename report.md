@@ -71,8 +71,7 @@ feedback, and a distinct result/error area. The verified local UI is
 
 Early mockup link: **Not verified** — no separate mockup URL is recorded in
 the repository or handoff history.
-Screen-recorded demonstration: [video1697873008.mp4](<C:/Users/nikhi/Documents/Zoom/2026-09-29 15.49.13 Nikhil Raj K's Zoom Meeting/video1697873008.mp4>)
-  (verified local recording; not hosted in this GitHub repository).
+Screen-recorded demonstration: [Google Drive recording](https://drive.google.com/file/d/1sjPE1tnkbMUGDbz_pgZRp3_M_PDs5fvY/view?usp=sharing)
 
 ## Verification
 
