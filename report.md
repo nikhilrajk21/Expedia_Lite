@@ -87,6 +87,7 @@ The read-only inspection used Python SQLite URI mode against the existing databa
 ## Demonstration
 
 [Assignment 2 Part 2 RAG demonstration video](https://drive.google.com/file/d/1gznW7HkB5uFd_XmLFeD4tAiitpqBOqn0/view?usp=sharing)
+Assignment 2 Mockup (https://pennstateoffice365-my.sharepoint.com/:w:/g/personal/nmk5887_psu_edu/IQD0QNtkOP4XQoMqlepEjWVbAe07NNd73agfVCupaQQ-0lo?e=bvWXDt)
 
 The supplied recording is intended to demonstrate the chatbot question, proposed SQL, retrieved records, grounded answer, and relevant interaction. The Drive link was not independently checked for accessibility, so its access status is Not verified.
 
