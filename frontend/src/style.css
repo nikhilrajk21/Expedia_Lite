@@ -67,6 +67,7 @@ h1 { margin-bottom: 1rem; font-family: Georgia, "Times New Roman", serif; font-s
 .nearby-results-heading { display: flex; align-items: end; justify-content: space-between; gap: 1rem; margin-bottom: 15px; }
 .nearby-results-heading h2 { margin: 0; font-family: Georgia, "Times New Roman", serif; font-size: 1.65rem; font-weight: 400; letter-spacing: -.035em; }
 .nearby-results-heading > span { color: #657087; font-size: .78rem; }
+.nearby-result-source { color: #315d9f !important; font-weight: 760; }
 .nearby-results-layout { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(280px, .9fr); gap: 15px; }
 .nearby-map { min-height: 365px; overflow: hidden; border: 1px solid #c6cfdd; border-radius: 11px; background: #dfe8f0; }
 .nearby-map:focus-visible { outline: 3px solid #ffcc2f; outline-offset: 3px; }
@@ -75,14 +76,51 @@ h1 { margin-bottom: 1rem; font-family: Georgia, "Times New Roman", serif; font-s
 .nearby-hotel:hover, .nearby-hotel.selected { border-color: #1769e8; background: #eef5ff; box-shadow: 0 0 0 2px rgba(23, 105, 232, .12); }
 .nearby-hotel:focus-visible { outline: 3px solid #ffcc2f; outline-offset: 2px; }
 .nearby-hotel h3 { margin-bottom: 4px; color: #17233d; font-size: .98rem; }
+.nearby-source { margin-bottom: 6px; color: #315d9f; font-size: .68rem; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
 .nearby-hotel > p { margin-bottom: 9px; color: #59667c; font-size: .78rem; line-height: 1.35; }
+.nearby-hotel > p.nearby-source { margin-bottom: 6px; color: #315d9f; font-size: .68rem; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
 .nearby-hotel-fields { display: grid; gap: 5px; margin: 0; }
 .nearby-hotel-fields > div { display: grid; grid-template-columns: 82px minmax(0, 1fr); gap: 8px; }
 .nearby-hotel-fields dt { color: #657087; font-size: .68rem; font-weight: 760; }
 .nearby-hotel-fields dd { min-width: 0; margin: 0; overflow-wrap: anywhere; color: #2c3951; font-size: .7rem; }
+.nearby-demo-nights { margin-top: 12px; padding: 9px 10px; border-radius: 8px; color: #31506e; background: #edf5ff; font-size: .7rem; line-height: 1.4; }
+.nearby-demo-nights strong { display: block; margin-bottom: 4px; font-size: .7rem; }
+.nearby-demo-nights ul { display: grid; gap: 2px; margin: 0; padding-left: 16px; }
+.nearby-hotel-actions { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 12px; }
+.local-button { padding: 7px 10px; border: 1px solid #1b65df; border-radius: 7px; color: #1b65df; background: #fff; font-size: .75rem; font-weight: 800; }
+.local-button:hover:not(:disabled) { color: #fff; background: #1b65df; }
+.local-button:disabled { cursor: wait; opacity: .62; }
+.local-button.remove { border-color: #b03232; color: #b03232; }
+.local-button.remove:hover:not(:disabled) { color: #fff; background: #b03232; }
+.nearby-save-notice { margin: 0 0 12px; }
 .nearby-marker-icon { border: 0; background: transparent; }
 .nearby-marker-dot { display: block; width: 19px; height: 19px; border: 3px solid #fff; border-radius: 50%; background: #1769e8; box-shadow: 0 2px 7px rgba(17, 37, 68, .45); transition: transform .15s ease, background-color .15s ease; }
 .nearby-marker-dot.selected { background: #e14e32; transform: scale(1.35); }
+
+.chat-section { max-width: 1180px; margin: 0 auto; padding: 0 clamp(20px, 4vw, 44px) 58px; scroll-margin-top: 20px; }
+.chat-card { padding: clamp(20px, 3vw, 29px); border: 1px solid #d9e0ea; border-radius: 15px; background: #fff; box-shadow: 0 7px 20px rgba(20, 36, 65, .08); }
+.chat-heading { display: flex; align-items: end; justify-content: space-between; gap: 1rem; margin-bottom: 15px; }
+.chat-heading h2 { margin: 0; font-family: Georgia, "Times New Roman", serif; font-size: 1.65rem; font-weight: 400; letter-spacing: -.035em; }
+.chat-heading > span { color: #657087; font-size: .78rem; }
+.chat-transcript { display: grid; gap: 10px; max-height: 280px; margin-bottom: 16px; padding: 14px; overflow-y: auto; border: 1px solid #dce2eb; border-radius: 11px; background: #f8faff; }
+.chat-empty, .chat-thinking { margin: 0; color: #657087; font-size: .86rem; }
+.chat-message { max-width: 78%; padding: 10px 12px; border-radius: 10px; color: #26354e; background: #e7eef9; }
+.chat-message.user { margin-left: auto; color: #fff; background: #1769e8; }
+.chat-message.assistant { margin-right: auto; }
+.chat-message.chat-technical { max-width: 100%; border: 1px solid #d9e0ea; background: #fff; }
+.chat-message.chat-answer { border-color: #b9d7c5; background: #f3fbf5; }
+.chat-role { display: block; margin-bottom: 3px; font-size: .69rem; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; opacity: .78; }
+.chat-message p { margin: 0; font-size: .88rem; line-height: 1.45; white-space: pre-wrap; }
+.chat-code { max-width: 100%; margin: 7px 0 0; padding: 10px; overflow-x: auto; border-radius: 7px; color: #eaf1ff; background: #17243c; white-space: pre-wrap; overflow-wrap: anywhere; }
+.chat-code code { font-family: "Cascadia Code", Consolas, monospace; font-size: .76rem; line-height: 1.45; }
+.chat-summary { color: #53627a; }
+.chat-record-list { display: grid; gap: 8px; margin: 8px 0 0; padding: 0; list-style: none; }
+.chat-record { display: grid; gap: 3px; padding: 9px 10px; border: 1px solid #dce2eb; border-radius: 7px; background: #f8faff; font-size: .82rem; line-height: 1.4; }
+.chat-record strong { color: #17233d; font-size: .9rem; }
+.chat-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: end; }
+.chat-form label { grid-column: 1 / -1; color: #3c4860; font-size: .83rem; font-weight: 760; }
+.chat-form textarea { width: 100%; min-height: 47px; resize: vertical; padding: 11px; border: 1px solid #adb7c8; border-radius: 8px; color: #17233d; background: #fff; }
+.chat-send-button { min-height: 47px; padding: 0 20px; }
 
 .results-page, .booking-section { max-width: 1180px; margin: 0 auto; padding: 76px clamp(20px, 4vw, 44px); }
 .search-summary, .booking-heading { display: flex; align-items: end; justify-content: space-between; gap: 1.5rem; margin-bottom: 22px; }
@@ -144,6 +182,7 @@ h1 { margin-bottom: 1rem; font-family: Georgia, "Times New Roman", serif; font-s
   .hero { min-height: 540px; padding: 18px 16px 0; }.nav-links { gap: .7rem; }.nav-links a { display: none; }.hero-copy { padding: 75px 0 120px; }
   .search-shell { margin-top: -68px; padding: 0 14px 16px; border-radius: 18px; }.travel-tabs { gap: 1rem; }.search-form { grid-template-columns: 1fr; }.destination, .search-button { grid-column: auto; }
   .zip-lookup-panel { grid-template-columns: 1fr; }.zip-form { align-items: stretch; flex-direction: column; }.zip-form .search-button { width: 100%; }.zip-help { grid-column: auto; margin: -8px 0 0; }.nearby-results-layout { grid-template-columns: 1fr; }.nearby-map { min-height: 300px; }.nearby-hotel-list { max-height: none; }.nearby-results-heading { align-items: flex-start; flex-direction: column; }
+  .chat-heading { align-items: flex-start; flex-direction: column; }.chat-form { grid-template-columns: 1fr; }.chat-send-button { width: 100%; }
   .results-page, .booking-section { padding: 59px 16px; }.search-summary, .booking-heading { align-items: flex-start; flex-direction: column; }.stay-result { grid-template-columns: 78px minmax(0, 1fr); }.result-art { min-height: 100%; font-size: 2rem; }.result-price { grid-column: 2; align-items: flex-start; padding: 0 15px 15px; }.result-price button { margin-top: 5px; }
   .rate-heading { align-items: flex-start; flex-direction: column; }.booking-card { align-items: flex-start; flex-direction: column; }.booking-actions { flex-direction: row; }
 }
