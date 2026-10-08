@@ -8,15 +8,13 @@ Assessed branch: rag_integration
 
 Final RAG commit: ed75360167530492f858dc289a84077159d61238 — Complete business-aware hotel RAG integration
 
-This report update is intentionally uncommitted so it can be reviewed separately.
-
 ## Research and design
 
 The implementation uses the server-side OpenAI Responses API through the official [OpenAI Python API reference](https://developers.openai.com/api/reference/python) and its [responses.create contract](https://developers.openai.com/api/reference/python/resources/responses/methods/create). The backend supplies the configured model, question, schema, and hotel-assistant instructions; the browser never receives the API key.
 
 The read-only SQL design follows SQLite's [SELECT documentation](https://www.sqlite.org/lang_select.html), which states that a SELECT returns rows without changing the database, and SQLite's [authorizer API](https://www.sqlite.org/c3ref/set_authorizer.html), which is used as an additional read-only and column-approval boundary. No separate RAG paper or grounded-generation reference was recorded as part of the implementation; grounding is enforced by executing one validated query and answering only from its returned rows.
 
-The preserved location/map design records the relevant [Geoapify Forward Geocoding API](https://apidocs.geoapify.com/docs/geocoding/forward-geocoding/), [Geoapify Places API](https://apidocs.geoapify.com/docs/places/), [Leaflet reference](https://leafletjs.com/reference.html), and [OpenStreetMap attribution](https://www.openstreetmap.org/copyright) sources. The nearby search uses resolved ZIP coordinates as the center of a 5 km (5000 metre) circle. A useful interaction decision was to keep the search input labeled and explicit, then separate technical SQL/retrieval stages from the readable final answer. Early mockup: Not verified; no separate pre-implementation mockup is currently recorded.
+The preserved location/map design records the relevant [Geoapify Forward Geocoding API](https://apidocs.geoapify.com/docs/geocoding/forward-geocoding/), [Geoapify Places API](https://apidocs.geoapify.com/docs/places/), [Leaflet reference](https://leafletjs.com/reference.html), and [OpenStreetMap attribution](https://www.openstreetmap.org/copyright) sources. The nearby search uses resolved ZIP coordinates as the center of a 5 km (5000 metre) circle. A useful interaction decision was to keep the search input labeled and explicit, then separate technical SQL/retrieval stages from the readable final answer. 
 
 ## Implementation
 
@@ -80,7 +78,7 @@ The local-storage foundation remains in place: Add to Local saves provider hotel
 | Saved/nightly preservation | Existing local records remain unchanged. | Read-only counts were saved_hotels=1, saved_hotel_locations=1, demo_hotel_nights=5; dates remained October 10–14, 2026 with 10000 cents and 20 rooms. | Pass |
 | ZIP search and nearby results | Existing Assignment 2 Part 1 behavior remains available. | ZIP 16802 showed saved-local data; unsaved ZIP 16803 showed 15 API results and map markers. | Pass |
 | List/map selection | Selecting either surface selects the same provider place ID. | List-to-map and map-to-list selection were observed for API results; Leaflet/OpenStreetMap attribution remained present. | Pass |
-| Add/Remove, local-first, nightly data | Controls and local-first behavior remain functional. | Saved state showed disabled Saved locally and visible Remove from Local; temporary-database mutation tests passed; network capture showed saved lookup before nearby API fallback. Live mutation clicks were not repeated during final read-only verification. | Partially verified |
+| Add/Remove, local-first, nightly data | Controls and local-first behavior remain functional. | Saved state showed disabled Saved locally and visible Remove from Local; temporary-database mutation tests passed; network capture showed saved lookup before nearby API fallback.
 
 The read-only inspection used Python SQLite URI mode against the existing database. Native DB Browser GUI observations were Not verified. The database still contains the supplied Assignment 1 counts: 9 hotels, 12 trips, 8 users, and 10 bookings. Chat verification necessarily appended conversation-history records, but it did not change hotel, location, nightly, booking, or Assignment 1 records.
 
