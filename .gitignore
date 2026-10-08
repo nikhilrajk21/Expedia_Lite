@@ -4,3 +4,4 @@ __pycache__/
 *.py[cod]
 data/*.sqlite3
 .env
+backend/logs/

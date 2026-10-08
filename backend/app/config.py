@@ -22,3 +22,15 @@ def get_geoapify_api_key() -> str | None:
     """Return the configured backend-only Geoapify key, or ``None`` when blank."""
     value = os.getenv("GEOAPIFY_API_KEY", "").strip()
     return value or None
+
+
+def get_openai_api_key() -> str | None:
+    """Return the configured backend-only OpenAI key, or ``None`` when blank."""
+    value = os.getenv("OPENAI_API_KEY", "").strip()
+    return value or None
+
+
+def get_openai_model() -> str | None:
+    """Return the configured OpenAI model, or ``None`` when blank."""
+    value = os.getenv("OPENAI_MODEL", "").strip()
+    return value or None

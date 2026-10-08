@@ -63,6 +63,57 @@ CREATE INDEX IF NOT EXISTS idx_bookings_user_id ON bookings (user_id);
 CREATE INDEX IF NOT EXISTS idx_bookings_trip_id ON bookings (trip_id);
 """
 
+ASSIGNMENT_2_SAVED_HOTELS_MIGRATION = """
+CREATE TABLE IF NOT EXISTS saved_hotels (
+    hotel_id TEXT PRIMARY KEY,
+    name TEXT,
+    address TEXT,
+    latitude REAL NOT NULL CHECK (latitude >= -90 AND latitude <= 90),
+    longitude REAL NOT NULL CHECK (longitude >= -180 AND longitude <= 180)
+);
+CREATE TABLE IF NOT EXISTS demo_hotel_nights (
+    hotel_id TEXT NOT NULL,
+    stay_date TEXT NOT NULL CHECK (
+        stay_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
+        AND strftime('%Y-%m-%d', stay_date) = stay_date
+    ),
+    nightly_rate_cents INTEGER NOT NULL DEFAULT 10000
+        CHECK (nightly_rate_cents >= 0),
+    rooms_available INTEGER NOT NULL DEFAULT 20
+        CHECK (rooms_available >= 0),
+    PRIMARY KEY (hotel_id, stay_date),
+    FOREIGN KEY (hotel_id) REFERENCES saved_hotels (hotel_id)
+);
+CREATE TABLE IF NOT EXISTS saved_hotel_locations (
+    hotel_id TEXT NOT NULL,
+    zip_code TEXT NOT NULL,
+    latitude REAL NOT NULL CHECK (latitude >= -90 AND latitude <= 90),
+    longitude REAL NOT NULL CHECK (longitude >= -180 AND longitude <= 180),
+    PRIMARY KEY (hotel_id, zip_code),
+    FOREIGN KEY (hotel_id) REFERENCES saved_hotels (hotel_id)
+);
+CREATE INDEX IF NOT EXISTS idx_saved_hotel_locations_zip_code
+    ON saved_hotel_locations (zip_code);
+"""
+
+CONVERSATION_HISTORY_MIGRATION = """
+CREATE TABLE IF NOT EXISTS conversation_messages (
+    message_id TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL,
+    timestamp TEXT NOT NULL,
+    role TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'system')),
+    stage TEXT NOT NULL CHECK (
+        stage IN (
+            'user_question', 'sql_proposal', 'executed_sql',
+            'retrieved_records', 'assistant_answer', 'error'
+        )
+    ),
+    content TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_conversation_messages_conversation
+    ON conversation_messages (conversation_id, timestamp, message_id);
+"""
+
 
 class ReferenceNotFoundError(LookupError):
     """A requested user, trip, or booking does not exist."""
@@ -90,6 +141,8 @@ class DatabaseController:
         """
         with self.open() as connection:
             connection.executescript(SCHEMA)
+            connection.executescript(ASSIGNMENT_2_SAVED_HOTELS_MIGRATION)
+            connection.executescript(CONVERSATION_HISTORY_MIGRATION)
             seeded = connection.execute(
                 "SELECT 1 FROM app_metadata WHERE metadata_key = ?",
                 ("seed_version",),
@@ -102,6 +155,49 @@ class DatabaseController:
                 ("seed_version", SEED_VERSION),
             )
         return True
+
+    def append_conversation_message(
+        self,
+        *,
+        message_id: str,
+        conversation_id: str,
+        timestamp: str,
+        role: str,
+        stage: str,
+        content: str,
+    ) -> dict[str, str]:
+        """Persist one labeled chat event independently from hotel reads."""
+        with self.open() as connection:
+            connection.execute(
+                """
+                INSERT INTO conversation_messages
+                    (message_id, conversation_id, timestamp, role, stage, content)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (message_id, conversation_id, timestamp, role, stage, content),
+            )
+        return {
+            "message_id": message_id,
+            "conversation_id": conversation_id,
+            "timestamp": timestamp,
+            "role": role,
+            "stage": stage,
+            "content": content,
+        }
+
+    def list_conversation_messages(self, conversation_id: str) -> list[dict[str, str]]:
+        """Read one conversation's labeled history in insertion order."""
+        with self.open() as connection:
+            rows = connection.execute(
+                """
+                SELECT message_id, conversation_id, timestamp, role, stage, content
+                FROM conversation_messages
+                WHERE conversation_id = ?
+                ORDER BY rowid
+                """,
+                (conversation_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def search_hotels(self, name: str) -> list[dict[str, object]]:
         """Read Hotel and Trip models and preserve the hotel-search contract."""
@@ -128,6 +224,134 @@ class DatabaseController:
                 ).fetchall()
                 results.append(hotel.to_search_dict([Trip.from_row(row) for row in trip_rows]))
         return results
+
+    def save_saved_hotel(
+        self,
+        *,
+        hotel_id: str,
+        name: str | None,
+        address: str | None,
+        latitude: float,
+        longitude: float,
+        zip_code: str,
+        search_latitude: float,
+        search_longitude: float,
+        stay_dates: tuple[str, ...],
+    ) -> dict[str, object]:
+        """Persist a provider hotel, its searched location, and demo nights idempotently."""
+        with self.open() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                """
+                INSERT INTO saved_hotels (hotel_id, name, address, latitude, longitude)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT (hotel_id) DO NOTHING
+                """,
+                (hotel_id, name, address, latitude, longitude),
+            )
+            connection.execute(
+                """
+                INSERT INTO saved_hotel_locations
+                    (hotel_id, zip_code, latitude, longitude)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT (hotel_id, zip_code) DO NOTHING
+                """,
+                (hotel_id, zip_code, search_latitude, search_longitude),
+            )
+            for stay_date in stay_dates:
+                connection.execute(
+                    """
+                    INSERT INTO demo_hotel_nights (hotel_id, stay_date)
+                    VALUES (?, ?)
+                    ON CONFLICT (hotel_id, stay_date) DO NOTHING
+                    """,
+                    (hotel_id, stay_date),
+                )
+            saved_row = connection.execute(
+                "SELECT hotel_id, name, address, latitude, longitude "
+                "FROM saved_hotels WHERE hotel_id = ?",
+                (hotel_id,),
+            ).fetchone()
+            location_row = connection.execute(
+                "SELECT zip_code, latitude, longitude FROM saved_hotel_locations "
+                "WHERE hotel_id = ? AND zip_code = ?",
+                (hotel_id, zip_code),
+            ).fetchone()
+            night_rows = connection.execute(
+                "SELECT stay_date, nightly_rate_cents, rooms_available "
+                "FROM demo_hotel_nights WHERE hotel_id = ? ORDER BY stay_date",
+                (hotel_id,),
+            ).fetchall()
+        return {
+            "hotel": self._saved_hotel_record(saved_row),
+            "location": dict(location_row),
+            "nights": [dict(row) for row in night_rows],
+        }
+
+    def list_saved_hotels_for_zip(self, zip_code: str) -> list[dict[str, object]]:
+        """Return saved provider hotels associated with one searched ZIP."""
+        with self.open() as connection:
+            rows = connection.execute(
+                """
+                SELECT saved_hotels.hotel_id, saved_hotels.name,
+                    saved_hotels.address, saved_hotels.latitude,
+                    saved_hotels.longitude, saved_hotel_locations.zip_code,
+                    saved_hotel_locations.latitude AS search_latitude,
+                    saved_hotel_locations.longitude AS search_longitude
+                FROM saved_hotels
+                JOIN saved_hotel_locations
+                    ON saved_hotel_locations.hotel_id = saved_hotels.hotel_id
+                WHERE saved_hotel_locations.zip_code = ?
+                ORDER BY saved_hotels.hotel_id
+                """,
+                (zip_code,),
+            ).fetchall()
+            saved_hotels = []
+            for row in rows:
+                night_rows = connection.execute(
+                    "SELECT stay_date, nightly_rate_cents, rooms_available "
+                    "FROM demo_hotel_nights WHERE hotel_id = ? ORDER BY stay_date",
+                    (row["hotel_id"],),
+                ).fetchall()
+                saved_hotels.append(
+                    {
+                        "place_id": row["hotel_id"],
+                        "name": row["name"],
+                        "address": row["address"],
+                        "latitude": row["latitude"],
+                        "longitude": row["longitude"],
+                        "zip_code": row["zip_code"],
+                        "center": {
+                            "latitude": row["search_latitude"],
+                            "longitude": row["search_longitude"],
+                        },
+                        "nights": [dict(night) for night in night_rows],
+                    }
+                )
+        return saved_hotels
+
+    def delete_saved_hotel(self, hotel_id: str) -> None:
+        """Delete one saved hotel and all dependent local records in one transaction."""
+        with self.open() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT 1 FROM saved_hotels WHERE hotel_id = ?", (hotel_id,)
+            ).fetchone()
+            if row is None:
+                raise ReferenceNotFoundError("Saved hotel was not found.")
+            connection.execute("DELETE FROM demo_hotel_nights WHERE hotel_id = ?", (hotel_id,))
+            connection.execute("DELETE FROM saved_hotel_locations WHERE hotel_id = ?", (hotel_id,))
+            connection.execute("DELETE FROM saved_hotels WHERE hotel_id = ?", (hotel_id,))
+
+    @staticmethod
+    def _saved_hotel_record(row: sqlite3.Row) -> dict[str, object]:
+        return {
+            "place_id": row["hotel_id"],
+            "name": row["name"],
+            "address": row["address"],
+            "latitude": row["latitude"],
+            "longitude": row["longitude"],
+        }
 
     def create_booking(
         self, *, user_id: str, trip_id: str, booked_on: str, is_test: bool

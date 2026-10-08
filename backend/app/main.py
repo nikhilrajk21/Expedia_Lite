@@ -12,9 +12,21 @@ from .config import is_geoapify_api_key_configured
 try:  # Supports backend-directory Uvicorn and project-root test imports.
     from controllers import (
         BookingController,
+        ChatConfigurationError,
+        ChatController,
+        ChatProviderError,
+        ChatValidationError,
         CreateBookingCommand,
+        ConversationController,
+        ConversationPersistenceError,
+        ConversationValidationError,
         DatabaseController,
         HotelController,
+        HotelRagConfigurationError,
+        HotelRagController,
+        HotelRagExecutionError,
+        HotelRagProviderError,
+        HotelRagValidationError,
         InvalidZipCodeError,
         LocationController,
         NearbyHotelController,
@@ -22,6 +34,10 @@ try:  # Supports backend-directory Uvicorn and project-root test imports.
         NearbyHotelNoResultsError,
         NearbyHotelProviderError,
         ReferenceNotFoundError,
+        SavedHotelController,
+        SavedHotelNotFoundError,
+        SavedHotelPersistenceError,
+        SavedHotelValidationError,
         TestBookingDeletionError,
         ZipLookupConfigurationError,
         ZipLookupProviderError,
@@ -30,9 +46,21 @@ try:  # Supports backend-directory Uvicorn and project-root test imports.
 except ModuleNotFoundError:  # pragma: no cover - depends on launch directory
     from backend.controllers import (
         BookingController,
+        ChatConfigurationError,
+        ChatController,
+        ChatProviderError,
+        ChatValidationError,
         CreateBookingCommand,
+        ConversationController,
+        ConversationPersistenceError,
+        ConversationValidationError,
         DatabaseController,
         HotelController,
+        HotelRagConfigurationError,
+        HotelRagController,
+        HotelRagExecutionError,
+        HotelRagProviderError,
+        HotelRagValidationError,
         InvalidZipCodeError,
         LocationController,
         NearbyHotelController,
@@ -40,6 +68,10 @@ except ModuleNotFoundError:  # pragma: no cover - depends on launch directory
         NearbyHotelNoResultsError,
         NearbyHotelProviderError,
         ReferenceNotFoundError,
+        SavedHotelController,
+        SavedHotelNotFoundError,
+        SavedHotelPersistenceError,
+        SavedHotelValidationError,
         TestBookingDeletionError,
         ZipLookupConfigurationError,
         ZipLookupProviderError,
@@ -49,8 +81,17 @@ except ModuleNotFoundError:  # pragma: no cover - depends on launch directory
 database_controller = DatabaseController()
 hotel_controller = HotelController(database_controller)
 booking_controller = BookingController(database_controller)
+basic_chat_controller = ChatController()
+conversation_controller = ConversationController(database_controller)
+chat_controller = HotelRagController(
+    database_controller,
+    conversation_controller=conversation_controller,
+    fallback_chat_controller=basic_chat_controller,
+)
+hotel_rag_controller = chat_controller
 location_controller = LocationController()
 nearby_hotel_controller = NearbyHotelController(location_controller.lookup_demo_postcode)
+saved_hotel_controller = SavedHotelController(database_controller)
 
 class BookingCreateRequest(BaseModel):
     """Frontend request for a booking; the server owns booking ID and status."""
@@ -69,6 +110,38 @@ class BookingStatusUpdateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     status: Literal["cancelled"]
+
+
+class ChatRequest(BaseModel):
+    """One labeled message sent to the configured hotel assistant."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    message: str = Field(min_length=1, max_length=4000)
+    conversation_id: str | None = Field(default=None, max_length=100)
+
+
+class SavedHotelSearchCenterRequest(BaseModel):
+    """Resolved ZIP center supplied with a provider hotel save."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    latitude: float
+    longitude: float
+
+
+class SavedHotelRequest(BaseModel):
+    """Provider hotel fields plus the ZIP search context to associate."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    place_id: str = Field(min_length=1)
+    name: str | None = None
+    address: str | None = None
+    latitude: float
+    longitude: float
+    zip_code: str
+    center: SavedHotelSearchCenterRequest
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
@@ -89,6 +162,84 @@ def get_health() -> dict:
         else "key is not configured"
     )
     return {"status": "ok", "geoapify_api_key": key_status}
+
+
+@app.post("/api/chat")
+def send_chat_message(request: ChatRequest) -> dict[str, str]:
+    """Return one safe hotel-aware response and its persistent conversation ID."""
+    try:
+        if request.conversation_id is None:
+            return chat_controller.reply(request.message)
+        return chat_controller.reply(
+            request.message,
+            conversation_id=request.conversation_id,
+        )
+    except ChatValidationError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Message cannot be empty or too long.",
+        ) from None
+    except ChatConfigurationError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Chat is not configured.",
+        ) from None
+    except ChatProviderError:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Chat provider is unavailable.",
+        ) from None
+    except HotelRagConfigurationError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Chat is not configured.",
+        ) from None
+    except HotelRagValidationError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="The hotel question could not be safely processed.",
+        ) from None
+    except HotelRagExecutionError:
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail="The hotel search took too long.",
+        ) from None
+    except HotelRagProviderError:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Chat provider is unavailable.",
+        ) from None
+    except ConversationValidationError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Conversation ID is invalid.",
+        ) from None
+    except ConversationPersistenceError:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Conversation history is unavailable.",
+        ) from None
+
+
+@app.get("/api/chat/history")
+def get_chat_history(
+    conversation_id: str = Query(..., description="Conversation UUID")
+) -> dict[str, object]:
+    """Load labeled chat history for a conversation after refresh or restart."""
+    try:
+        normalized_id = conversation_controller.normalize_id(conversation_id)
+        messages = conversation_controller.history(normalized_id)
+        return {"conversation_id": normalized_id, "messages": messages}
+    except ConversationValidationError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Conversation ID is invalid.",
+        ) from None
+    except ConversationPersistenceError:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Conversation history is unavailable.",
+        ) from None
 
 
 @app.get("/api/demo/zip-location")
@@ -211,6 +362,56 @@ def get_hotels_nearby(
 def search_hotels(name: str = Query(default="", description="Hotel-name search text")) -> dict:
     """Return SQLite-backed hotels matching a name and their connected stays."""
     return {"results": hotel_controller.search(name)}
+
+
+@app.post("/api/saved-hotels", status_code=status.HTTP_201_CREATED)
+def save_provider_hotel(request: SavedHotelRequest) -> dict[str, object]:
+    """Save one provider hotel and associate it with the searched ZIP."""
+    try:
+        return saved_hotel_controller.save(request.model_dump())
+    except SavedHotelValidationError as error:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(error)) from None
+    except SavedHotelPersistenceError:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Saved hotel could not be stored.",
+        ) from None
+
+
+@app.get("/api/saved-hotels")
+def get_saved_hotels(
+    zip_code: str = Query(..., description="Five-digit searched ZIP code")
+) -> dict[str, list[dict[str, object]]]:
+    """Return locally saved provider hotels associated with a searched ZIP."""
+    try:
+        return {"results": saved_hotel_controller.list_for_zip(zip_code)}
+    except SavedHotelValidationError as error:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(error)) from None
+    except SavedHotelPersistenceError:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Saved hotels could not be loaded.",
+        ) from None
+
+
+@app.delete("/api/saved-hotels/{hotel_id}")
+def remove_saved_hotel(hotel_id: str) -> dict[str, str]:
+    """Remove one saved provider hotel and its dependent local records."""
+    try:
+        saved_hotel_controller.remove(hotel_id)
+    except SavedHotelValidationError as error:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(error)) from None
+    except SavedHotelNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Saved hotel was not found.",
+        ) from None
+    except SavedHotelPersistenceError:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Saved hotel could not be removed.",
+        ) from None
+    return {"deleted_place_id": hotel_id}
 
 
 @app.post("/api/bookings", status_code=status.HTTP_201_CREATED)

@@ -16,6 +16,14 @@ const bookingForm = ref({ userId: 'U001', tripId: 'T001', bookedOn: '2026-09-10'
 const bookingLoading = ref(false)
 const bookingMessage = ref('')
 const bookingError = ref('')
+const chatMessage = ref('')
+const chatMessages = ref([])
+const chatLoading = ref(false)
+const chatError = ref('')
+const chatTranscriptElement = ref(null)
+const conversationId = ref('')
+const chatHistoryLoading = ref(false)
+const CHAT_CONVERSATION_STORAGE_KEY = 'expedia-lite-conversation-id'
 const zipCode = ref('')
 const zipLocation = ref(null)
 const zipLoading = ref(false)
@@ -23,11 +31,16 @@ const zipValidationMessage = ref('')
 const zipError = ref('')
 const nearbyState = ref('initial')
 const nearbyHotels = ref([])
+const nearbyResultSource = ref('')
 const nearbyMapElement = ref(null)
 const nearbyMap = ref(null)
 const nearbyMarkerLayer = ref(null)
 const selectedNearbyPlaceId = ref('')
 const nearbyMarkersByPlaceId = new Map()
+const savedNearbyPlaceIds = ref(new Set())
+const pendingNearbyPlaceIds = ref(new Set())
+const savedHotelMessage = ref('')
+const savedHotelError = ref('')
 
 const allStays = computed(() => results.value.flatMap((hotel) => hotel.available_stays.map((stay) => ({
   ...stay,
@@ -74,6 +87,189 @@ async function requestJson(url, options) {
     throw error
   }
   return data
+}
+
+function scrollToChat() {
+  document.getElementById('chat-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
+
+function chatErrorMessage(error) {
+  if (error?.status === 400) return 'Enter a message before sending it.'
+  if (error?.status === 503) return 'The chat service is not configured.'
+  if (error?.status === 502) return 'The chat provider is temporarily unavailable.'
+  if (error?.status === 504) return 'The hotel search took too long. Please try again.'
+  if (error?.status === 500) return 'Conversation history is temporarily unavailable.'
+  return 'The chat service could not be reached. Please try again.'
+}
+
+function createConversationId() {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID()
+  const bytes = new Uint8Array(16)
+  if (globalThis.crypto?.getRandomValues) {
+    globalThis.crypto.getRandomValues(bytes)
+  } else {
+    for (let index = 0; index < bytes.length; index += 1) bytes[index] = Math.floor(Math.random() * 256)
+  }
+  bytes[6] = (bytes[6] & 0x0f) | 0x40
+  bytes[8] = (bytes[8] & 0x3f) | 0x80
+  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('')
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+}
+
+function isConversationId(value) {
+  return typeof value === 'string'
+    && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
+}
+
+function initializeConversation() {
+  try {
+    const storedId = window.localStorage.getItem(CHAT_CONVERSATION_STORAGE_KEY)
+    conversationId.value = isConversationId(storedId) ? storedId : createConversationId()
+    window.localStorage.setItem(CHAT_CONVERSATION_STORAGE_KEY, conversationId.value)
+  } catch {
+    conversationId.value = createConversationId()
+  }
+}
+
+function chatStageLabel(message) {
+  const labels = {
+    user_question: 'User Question',
+    sql_proposal: 'SQL Proposal',
+    executed_sql: 'Executed SQL',
+    retrieved_records: 'Retrieved Records',
+    assistant_answer: 'Assistant Answer',
+    error: 'Error',
+  }
+  return labels[message.stage] ?? (message.role === 'user' ? 'User Question' : 'Assistant Answer')
+}
+
+function parseChatPayload(content) {
+  if (typeof content !== 'string') return null
+  try {
+    const payload = JSON.parse(content)
+    return payload && typeof payload === 'object' && !Array.isArray(payload) ? payload : null
+  } catch {
+    return null
+  }
+}
+
+function formatChatValue(value) {
+  if (value === null || value === undefined) return '—'
+  if (typeof value === 'object') return JSON.stringify(value)
+  return String(value)
+}
+
+function formatChatSql(message) {
+  const payload = parseChatPayload(message.content)
+  if (!payload) return message.content
+  const lines = []
+  if (typeof payload.sql === 'string' && payload.sql.trim()) {
+    lines.push(payload.sql.trim())
+  } else if (payload.kind === 'clarification' && typeof payload.clarification === 'string') {
+    lines.push('Clarification requested: ' + payload.clarification)
+  } else {
+    lines.push('No SQL statement proposed.')
+  }
+  if (payload.params && typeof payload.params === 'object' && !Array.isArray(payload.params)) {
+    const entries = Object.entries(payload.params)
+    if (entries.length) {
+      lines.push('', 'Parameters:')
+      entries.forEach(([key, value]) => lines.push(`${key}: ${formatChatValue(value)}`))
+    }
+  }
+  if (payload.row_limit !== undefined) lines.push('', `Row limit: ${formatChatValue(payload.row_limit)}`)
+  return lines.join('\n')
+}
+
+function isSqlStage(stage) {
+  return stage === 'sql_proposal' || stage === 'executed_sql'
+}
+
+function isTechnicalStage(stage) {
+  return isSqlStage(stage) || stage === 'retrieved_records' || stage === 'error'
+}
+
+function retrievedRows(message) {
+  const payload = parseChatPayload(message.content)
+  return Array.isArray(payload?.rows) ? payload.rows : []
+}
+
+function retrievedRowCount(message) {
+  const payload = parseChatPayload(message.content)
+  if (Number.isInteger(payload?.row_count)) return payload.row_count
+  return retrievedRows(message).length
+}
+
+function formatChatDollars(cents) {
+  const numericCents = Number(cents)
+  if (!Number.isFinite(numericCents)) return 'Unavailable'
+  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(numericCents / 100)
+}
+
+function retrievedSummary(message) {
+  const count = retrievedRowCount(message)
+  if (count === 0) return 'No saved hotel records matched the validated query.'
+  return `${count} saved hotel record${count === 1 ? '' : 's'} retrieved from SQLite.`
+}
+
+async function loadChatHistory({ showError = true } = {}) {
+  if (!conversationId.value) initializeConversation()
+  chatHistoryLoading.value = true
+  try {
+    const data = await requestJson('/api/chat/history?conversation_id=' + encodeURIComponent(conversationId.value))
+    if (typeof data.conversation_id === 'string') {
+      conversationId.value = data.conversation_id
+      try {
+        window.localStorage.setItem(CHAT_CONVERSATION_STORAGE_KEY, conversationId.value)
+      } catch {
+        // Continue with the in-memory ID when storage is unavailable.
+      }
+    }
+    chatMessages.value = Array.isArray(data.messages) ? data.messages : []
+  } catch (error) {
+    if (showError) chatError.value = chatErrorMessage(error)
+  } finally {
+    chatHistoryLoading.value = false
+  }
+}
+
+async function sendChatMessage() {
+  const message = chatMessage.value.trim()
+  if (!message || chatLoading.value) return
+
+  if (!conversationId.value) initializeConversation()
+  chatError.value = ''
+  chatMessages.value.push({ role: 'user', stage: 'user_question', content: message })
+  chatMessage.value = ''
+  chatLoading.value = true
+  try {
+    const data = await requestJson('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message, conversation_id: conversationId.value }),
+    })
+    if (typeof data.reply !== 'string' || !data.reply.trim()) {
+      throw new Error('Empty chat response')
+    }
+    if (typeof data.conversation_id === 'string') {
+      conversationId.value = data.conversation_id
+      try {
+        window.localStorage.setItem(CHAT_CONVERSATION_STORAGE_KEY, conversationId.value)
+      } catch {
+        // Continue with the in-memory ID when storage is unavailable.
+      }
+    }
+    await loadChatHistory({ showError: false })
+  } catch (error) {
+    chatError.value = chatErrorMessage(error)
+    await loadChatHistory({ showError: false })
+  } finally {
+    chatLoading.value = false
+    await nextTick()
+    if (chatTranscriptElement.value) {
+      chatTranscriptElement.value.scrollTop = chatTranscriptElement.value.scrollHeight
+    }
+  }
 }
 
 async function searchHotels() {
@@ -124,6 +320,48 @@ function validateNearbyHotels(hotels) {
   return { valid: true, hotels: validHotels }
 }
 
+function validateSavedHotels(hotels) {
+  if (!Array.isArray(hotels)) return { valid: false, hotels: [] }
+  const seenPlaceIds = new Set()
+  const validHotels = []
+  for (const hotel of hotels) {
+    const hasRequiredFields = hotel
+      && typeof hotel.place_id === 'string'
+      && hotel.place_id.trim()
+      && isValidCoordinate(hotel.latitude, -90, 90)
+      && isValidCoordinate(hotel.longitude, -180, 180)
+      && typeof hotel.zip_code === 'string'
+      && /^\d{5}$/.test(hotel.zip_code)
+      && hotel.center
+      && isValidCoordinate(hotel.center.latitude, -90, 90)
+      && isValidCoordinate(hotel.center.longitude, -180, 180)
+      && Array.isArray(hotel.nights)
+    if (!hasRequiredFields) return { valid: false, hotels: [] }
+    if (seenPlaceIds.has(hotel.place_id)) continue
+    const nights = hotel.nights.map((night) => ({
+      stay_date: night?.stay_date,
+      nightly_rate_cents: night?.nightly_rate_cents,
+      rooms_available: night?.rooms_available,
+    }))
+    if (nights.some((night) => typeof night.stay_date !== 'string'
+      || !/^\d{4}-\d{2}-\d{2}$/.test(night.stay_date)
+      || !Number.isInteger(night.nightly_rate_cents)
+      || night.nightly_rate_cents < 0
+      || !Number.isInteger(night.rooms_available)
+      || night.rooms_available < 0)) {
+      return { valid: false, hotels: [] }
+    }
+    seenPlaceIds.add(hotel.place_id)
+    validHotels.push({
+      ...hotel,
+      name: typeof hotel.name === 'string' && hotel.name.trim() ? hotel.name : null,
+      address: typeof hotel.address === 'string' && hotel.address.trim() ? hotel.address : null,
+      nights,
+    })
+  }
+  return { valid: true, hotels: validHotels }
+}
+
 function destroyNearbyMap() {
   if (nearbyMap.value) {
     nearbyMap.value.stop()
@@ -138,7 +376,7 @@ function destroyNearbyMap() {
 function popupContent(hotel) {
   const content = document.createElement('div')
   const name = document.createElement('strong')
-  name.textContent = hotel.name
+  name.textContent = hotel.name || 'Saved hotel (name unavailable)'
   content.append(name)
   const address = hotel.address || hotel.locality
   if (address) {
@@ -211,7 +449,7 @@ function renderNearbyMap() {
     const coordinates = [hotel.latitude, hotel.longitude]
     const marker = L.marker(coordinates, {
       icon: hotelMarkerIcon(false),
-      title: hotel.name,
+      title: hotel.name || 'Saved hotel (name unavailable)',
     })
       .bindPopup(popupContent(hotel))
       .on('click', () => selectNearbyHotel(hotel.place_id))
@@ -226,10 +464,82 @@ function renderNearbyMap() {
   nearbyMap.value.invalidateSize()
 }
 
+async function fetchSavedHotels(zip) {
+  return requestJson('/api/saved-hotels?zip_code=' + encodeURIComponent(zip))
+}
+
+function updateSavedHotelIds(hotels) {
+  savedNearbyPlaceIds.value = new Set(hotels.map((hotel) => hotel.place_id))
+}
+
+function isNearbyHotelPending(placeId) {
+  return pendingNearbyPlaceIds.value.has(placeId)
+}
+
+function formatDemoRate(cents) {
+  return '$' + (cents / 100).toFixed(2)
+}
+
+async function saveNearbyHotel(hotel) {
+  const location = zipLocation.value
+  if (!location || savedNearbyPlaceIds.value.has(hotel.place_id) || isNearbyHotelPending(hotel.place_id)) return
+  savedHotelMessage.value = ''
+  savedHotelError.value = ''
+  pendingNearbyPlaceIds.value = new Set([...pendingNearbyPlaceIds.value, hotel.place_id])
+  try {
+    await requestJson('/api/saved-hotels', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        place_id: hotel.place_id,
+        name: hotel.name ?? null,
+        address: hotel.address ?? null,
+        latitude: hotel.latitude,
+        longitude: hotel.longitude,
+        zip_code: location.postcode,
+        center: { latitude: location.latitude, longitude: location.longitude },
+      }),
+    })
+    savedNearbyPlaceIds.value = new Set([...savedNearbyPlaceIds.value, hotel.place_id])
+    savedHotelMessage.value = hotel.name + ' was added to your local hotels.'
+  } catch {
+    savedHotelError.value = 'This hotel could not be added to local storage. Please try again.'
+  } finally {
+    const nextPending = new Set(pendingNearbyPlaceIds.value)
+    nextPending.delete(hotel.place_id)
+    pendingNearbyPlaceIds.value = nextPending
+  }
+}
+
+async function removeNearbyHotel(hotel) {
+  if (!savedNearbyPlaceIds.value.has(hotel.place_id) || isNearbyHotelPending(hotel.place_id)) return
+  savedHotelMessage.value = ''
+  savedHotelError.value = ''
+  pendingNearbyPlaceIds.value = new Set([...pendingNearbyPlaceIds.value, hotel.place_id])
+  try {
+    await requestJson('/api/saved-hotels/' + encodeURIComponent(hotel.place_id), { method: 'DELETE' })
+    const nextSaved = new Set(savedNearbyPlaceIds.value)
+    nextSaved.delete(hotel.place_id)
+    savedNearbyPlaceIds.value = nextSaved
+    savedHotelMessage.value = hotel.name + ' was removed from your local hotels.'
+  } catch {
+    savedHotelError.value = 'This hotel could not be removed from local storage. Please try again.'
+  } finally {
+    const nextPending = new Set(pendingNearbyPlaceIds.value)
+    nextPending.delete(hotel.place_id)
+    pendingNearbyPlaceIds.value = nextPending
+  }
+}
+
 async function lookupZip() {
   nearbyState.value = 'loading'
   zipLocation.value = null
   nearbyHotels.value = []
+  nearbyResultSource.value = ''
+  savedNearbyPlaceIds.value = new Set()
+  pendingNearbyPlaceIds.value = new Set()
+  savedHotelMessage.value = ''
+  savedHotelError.value = ''
   destroyNearbyMap()
   zipValidationMessage.value = ''
   zipError.value = ''
@@ -245,6 +555,37 @@ async function lookupZip() {
 
   zipLoading.value = true
   try {
+    let savedData
+    try {
+      savedData = await fetchSavedHotels(validatedZip)
+    } catch {
+      nearbyState.value = 'local-error'
+      zipError.value = 'Saved local hotel lookup could not be reached, so API results were not requested.'
+      return
+    }
+
+    const savedResults = validateSavedHotels(savedData?.results)
+    if (!savedResults.valid) {
+      nearbyState.value = 'invalid-provider-data'
+      zipError.value = 'Saved local hotel data was incomplete, so no results were shown.'
+      return
+    }
+    if (savedResults.hotels.length > 0) {
+      const firstSavedHotel = savedResults.hotels[0]
+      zipLocation.value = {
+        postcode: firstSavedHotel.zip_code,
+        latitude: firstSavedHotel.center.latitude,
+        longitude: firstSavedHotel.center.longitude,
+      }
+      nearbyHotels.value = savedResults.hotels
+      nearbyResultSource.value = 'local'
+      updateSavedHotelIds(savedResults.hotels)
+      nearbyState.value = 'success'
+      await nextTick()
+      renderNearbyMap()
+      return
+    }
+
     const data = await requestJson('/api/hotels/nearby?zip_code=' + encodeURIComponent(validatedZip))
     if (!data || typeof data.zip_code !== 'string' || !data.center
       || !isValidCoordinate(data.center.latitude, -90, 90)
@@ -270,6 +611,7 @@ async function lookupZip() {
       longitude: data.center.longitude,
     }
     nearbyHotels.value = normalizedResults.hotels
+    nearbyResultSource.value = 'api'
     nearbyState.value = 'success'
     await nextTick()
     renderNearbyMap()
@@ -371,7 +713,11 @@ async function deleteBooking(bookingId) {
   }
 }
 
-onMounted(loadBookings)
+onMounted(() => {
+  initializeConversation()
+  loadChatHistory()
+  loadBookings()
+})
 onBeforeUnmount(destroyNearbyMap)
 </script>
 
@@ -394,6 +740,8 @@ onBeforeUnmount(destroyNearbyMap)
             type="button"
             class="icon-button"
             aria-label="Messages"
+            aria-controls="chat-panel"
+            @click="scrollToChat"
           >
             ▢
           </button><button
@@ -586,8 +934,33 @@ onBeforeUnmount(destroyNearbyMap)
                   Hotels near {{ zipLocation.postcode }}
                 </h2>
               </div>
-              <span>{{ nearbyHotels.length }} provider result{{ nearbyHotels.length === 1 ? '' : 's' }}</span>
+              <span class="nearby-result-source">
+                {{ nearbyResultSource === 'local' ? 'Saved locally' : 'API results' }} ·
+                {{ nearbyHotels.length }} result{{ nearbyHotels.length === 1 ? '' : 's' }}
+              </span>
             </div>
+            <p
+              v-if="nearbyResultSource === 'local'"
+              class="notice nearby-save-notice"
+              role="status"
+            >
+              Showing hotels saved for this ZIP, not a complete list of hotels in the area.
+            </p>
+            <p
+              v-if="savedHotelMessage"
+              class="notice success nearby-save-notice"
+              role="status"
+              aria-live="polite"
+            >
+              {{ savedHotelMessage }}
+            </p>
+            <p
+              v-if="savedHotelError"
+              class="notice error nearby-save-notice"
+              role="alert"
+            >
+              {{ savedHotelError }}
+            </p>
             <div class="nearby-results-layout">
               <div
                 ref="nearbyMapElement"
@@ -609,7 +982,10 @@ onBeforeUnmount(destroyNearbyMap)
                   @keydown.enter.prevent="selectNearbyHotel(hotel.place_id)"
                   @keydown.space.prevent="selectNearbyHotel(hotel.place_id)"
                 >
-                  <h3>{{ hotel.name }}</h3>
+                  <p class="nearby-source">
+                    {{ nearbyResultSource === 'local' ? 'Saved locally' : 'API results' }}
+                  </p>
+                  <h3>{{ hotel.name || 'Saved hotel (name unavailable)' }}</h3>
                   <p v-if="hotel.address">
                     {{ hotel.address }}
                   </p>
@@ -627,6 +1003,39 @@ onBeforeUnmount(destroyNearbyMap)
                       <dt>Coordinates</dt><dd>{{ hotel.latitude }}, {{ hotel.longitude }}</dd>
                     </div>
                   </dl>
+                  <div
+                    v-if="hotel.nights && hotel.nights.length"
+                    class="nearby-demo-nights"
+                  >
+                    <strong>Simulated classroom data</strong>
+                    <ul>
+                      <li
+                        v-for="night in hotel.nights"
+                        :key="night.stay_date"
+                      >
+                        {{ night.stay_date }} · {{ formatDemoRate(night.nightly_rate_cents) }}/night · {{ night.rooms_available }} rooms available
+                      </li>
+                    </ul>
+                  </div>
+                  <div class="nearby-hotel-actions">
+                    <button
+                      type="button"
+                      class="local-button"
+                      :disabled="savedNearbyPlaceIds.has(hotel.place_id) || isNearbyHotelPending(hotel.place_id)"
+                      @click.stop="saveNearbyHotel(hotel)"
+                    >
+                      {{ savedNearbyPlaceIds.has(hotel.place_id) ? 'Saved locally' : isNearbyHotelPending(hotel.place_id) ? 'Saving…' : 'Add to Local' }}
+                    </button>
+                    <button
+                      v-if="savedNearbyPlaceIds.has(hotel.place_id)"
+                      type="button"
+                      class="local-button remove"
+                      :disabled="isNearbyHotelPending(hotel.place_id)"
+                      @click.stop="removeNearbyHotel(hotel)"
+                    >
+                      {{ isNearbyHotelPending(hotel.place_id) ? 'Removing…' : 'Remove from Local' }}
+                    </button>
+                  </div>
                 </article>
               </div>
             </div>
@@ -645,6 +1054,119 @@ onBeforeUnmount(destroyNearbyMap)
           role="status"
         >
           No hotels matched your search. Try a supplied hotel name.
+        </p>
+      </div>
+    </section>
+
+    <section
+      id="chat-panel"
+      class="chat-section"
+      aria-labelledby="chat-title"
+    >
+      <div class="chat-card">
+        <div class="chat-heading">
+          <div>
+            <p class="eyebrow">
+              EXPEDIA LITE ASSISTANT
+            </p>
+            <h2 id="chat-title">
+              Ask a quick travel question
+            </h2>
+          </div>
+          <span>Hotel data assistant</span>
+        </div>
+        <div
+          ref="chatTranscriptElement"
+          class="chat-transcript"
+          aria-label="Chat conversation"
+          aria-live="polite"
+        >
+          <p
+            v-if="chatMessages.length === 0"
+            class="chat-empty"
+          >
+            Send a message to start a conversation.
+          </p>
+          <article
+            v-for="(message, index) in chatMessages"
+            :key="index"
+            class="chat-message"
+            :class="[
+              message.role,
+              { 'chat-technical': isTechnicalStage(message.stage), 'chat-answer': message.stage === 'assistant_answer' },
+            ]"
+          >
+            <span class="chat-role">{{ chatStageLabel(message) }}</span>
+            <pre
+              v-if="isSqlStage(message.stage)"
+              class="chat-code"
+            ><code>{{ formatChatSql(message) }}</code></pre>
+            <template v-else-if="message.stage === 'retrieved_records'">
+              <p class="chat-summary">
+                {{ retrievedSummary(message) }}
+              </p>
+              <ul
+                v-if="retrievedRows(message).length"
+                class="chat-record-list"
+              >
+                <li
+                  v-for="(row, rowIndex) in retrievedRows(message)"
+                  :key="row.hotel_id ?? rowIndex"
+                  class="chat-record"
+                >
+                  <strong>{{ row.name || 'Saved hotel' }}</strong>
+                  <span v-if="row.address">{{ row.address }}</span>
+                  <span v-if="row.zip_code || row.stay_date">
+                    {{ row.zip_code ? `ZIP ${row.zip_code}` : '' }}{{ row.zip_code && row.stay_date ? ' · ' : '' }}{{ row.stay_date ? `Stay date ${row.stay_date}` : '' }}
+                  </span>
+                  <span v-if="row.nightly_rate_cents !== undefined">
+                    Simulated classroom data — nightly rate: {{ formatChatDollars(row.nightly_rate_cents) }}
+                  </span>
+                  <span v-if="row.rooms_available !== undefined">
+                    Simulated classroom data — rooms available: {{ formatChatValue(row.rooms_available) }}
+                  </span>
+                </li>
+              </ul>
+            </template>
+            <p v-else>
+              {{ message.content }}
+            </p>
+          </article>
+          <p
+            v-if="chatLoading"
+            class="chat-thinking"
+            role="status"
+          >
+            Thinking…
+          </p>
+        </div>
+        <form
+          class="chat-form"
+          @submit.prevent="sendChatMessage"
+        >
+          <label for="chat-message">Message</label>
+          <textarea
+            id="chat-message"
+            v-model="chatMessage"
+            rows="2"
+            maxlength="4000"
+            placeholder="Try Hello"
+            :disabled="chatLoading"
+          />
+          <button
+            class="search-button chat-send-button"
+            type="submit"
+            :disabled="chatLoading || !chatMessage.trim()"
+          >
+            {{ chatLoading ? 'Sending…' : 'Send' }}
+          </button>
+        </form>
+        <p
+          v-if="chatError"
+          class="notice error"
+          role="alert"
+        >
+          {{ chatError }}
         </p>
       </div>
     </section>
